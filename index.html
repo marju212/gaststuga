@@ -279,6 +279,7 @@ const JUMP_FORCE = 20;
 const GRAVITY = 30;
 const PLAYER_HEIGHT = 7.2;
 const PLAYER_RADIUS = 0.3;
+const MAX_STEP_UP = 2.0;
 let canJump = true;
 
 document.addEventListener('keydown', (e) => {
@@ -317,6 +318,7 @@ function raycastWall(origin, moveDir, maxDist) {
 }
 
 // Check if a position is clear (no wall within COLLISION_MARGIN in any direction)
+// Only checks above step-up height so low obstacles (foundation edges, door thresholds) don't block
 function isPositionBlocked(pos) {
   const dirs = [
     new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0),
@@ -324,10 +326,14 @@ function isPositionBlocked(pos) {
     new THREE.Vector3(1, 0, 1).normalize(), new THREE.Vector3(-1, 0, 1).normalize(),
     new THREE.Vector3(1, 0, -1).normalize(), new THREE.Vector3(-1, 0, -1).normalize(),
   ];
-  // Check at multiple heights (feet, waist, head)
-  const heights = [0.3, 0.5, 0.8];
-  for (const h of heights) {
-    const origin = new THREE.Vector3(pos.x, pos.y - PLAYER_HEIGHT * h, pos.z);
+  const feetY = pos.y - PLAYER_HEIGHT;
+  const checkYs = [
+    feetY + MAX_STEP_UP,
+    pos.y - PLAYER_HEIGHT * 0.5,
+    pos.y - PLAYER_HEIGHT * 0.3,
+  ];
+  for (const y of checkYs) {
+    const origin = new THREE.Vector3(pos.x, y, pos.z);
     for (const dir of dirs) {
       const dist = raycastWall(origin, dir, COLLISION_MARGIN);
       if (dist < COLLISION_MARGIN) return true;
@@ -337,13 +343,18 @@ function isPositionBlocked(pos) {
 }
 
 // Check movement along a direction; returns max safe distance
+// Rays start above step-up height so player can walk over low thresholds/foundations
 function checkMoveDirection(pos, moveDir, moveDist) {
   const dir = moveDir.clone().normalize();
-  // Ray from multiple heights
   let minDist = moveDist;
-  const heights = [0.3, 0.5, 0.8];
-  for (const h of heights) {
-    const origin = new THREE.Vector3(pos.x, pos.y - PLAYER_HEIGHT * h, pos.z);
+  const feetY = pos.y - PLAYER_HEIGHT;
+  const checkYs = [
+    feetY + MAX_STEP_UP,
+    pos.y - PLAYER_HEIGHT * 0.5,
+    pos.y - PLAYER_HEIGHT * 0.3,
+  ];
+  for (const y of checkYs) {
+    const origin = new THREE.Vector3(pos.x, y, pos.z);
     const wallDist = raycastWall(origin, dir, moveDist + COLLISION_MARGIN);
     const safeDist = wallDist - COLLISION_MARGIN;
     if (safeDist < minDist) minDist = safeDist;
@@ -689,12 +700,15 @@ function animate() {
     // Vertical movement
     camPos.y += velocity.y * delta;
 
-    // Ground check
+    // Ground check with step-up support
     const groundCheck = checkGround(camPos);
     if (groundCheck.grounded && camPos.y <= groundCheck.height) {
-      camPos.y = groundCheck.height;
-      velocity.y = 0;
-      canJump = true;
+      const stepUp = groundCheck.height - camPos.y;
+      if (stepUp <= MAX_STEP_UP) {
+        camPos.y = groundCheck.height;
+        velocity.y = 0;
+        canJump = true;
+      }
     }
 
     // Don't fall below ground plane
