@@ -279,7 +279,7 @@ const JUMP_FORCE = 20;
 const GRAVITY = 30;
 const PLAYER_HEIGHT = 7.2;
 const PLAYER_RADIUS = 0.3;
-const MAX_STEP_UP = 2.0;
+const MAX_STEP_UP = 3.0;
 let canJump = true;
 
 document.addEventListener('keydown', (e) => {
@@ -371,6 +371,36 @@ function checkGround(position) {
     return { grounded: true, height: hits[0].point.y + PLAYER_HEIGHT };
   }
   return { grounded: false, height: PLAYER_HEIGHT };
+}
+
+// Probe ahead for ground height to enable step-up before reaching the obstacle
+function checkGroundAhead(position, moveDir, dist) {
+  const aheadPos = position.clone().add(moveDir.clone().normalize().multiplyScalar(dist));
+  return checkGround(aheadPos);
+}
+
+// Try movement with step-up: temporarily raise player to step over low obstacles
+function tryMoveWithStepUp(pos, moveDir, moveDist) {
+  // First try normal move
+  const safeDist = checkMoveDirection(pos, moveDir, moveDist);
+  if (safeDist > 0.01) return { dist: safeDist, stepUp: 0 };
+
+  // Blocked — check if there's a step-up ahead we can walk over
+  const dir = moveDir.clone().normalize();
+  const aheadGround = checkGroundAhead(pos, dir, COLLISION_MARGIN + 0.5);
+  if (!aheadGround.grounded) return { dist: 0, stepUp: 0 };
+
+  const stepHeight = aheadGround.height - pos.y;
+  if (stepHeight <= 0 || stepHeight > MAX_STEP_UP) return { dist: 0, stepUp: 0 };
+
+  // Try the move from the raised position
+  const raisedPos = pos.clone();
+  raisedPos.y = aheadGround.height;
+  const raisedSafeDist = checkMoveDirection(raisedPos, moveDir, moveDist);
+  if (raisedSafeDist > 0.01 && !isPositionBlocked(raisedPos)) {
+    return { dist: raisedSafeDist, stepUp: stepHeight };
+  }
+  return { dist: 0, stepUp: 0 };
 }
 
 // ── Load STL Files ───────────────────────────────────────────
@@ -671,9 +701,10 @@ function animate() {
       const moveDist = moveVec.length();
       if (moveDist > 0) {
         camPos.copy(beforeMove);
-        const safeDist = checkMoveDirection(beforeMove, moveVec, moveDist);
-        if (safeDist > 0.01) {
-          controls.moveForward(-velocity.z * delta * (safeDist / moveDist));
+        const result = tryMoveWithStepUp(beforeMove, moveVec, moveDist);
+        if (result.dist > 0.01) {
+          if (result.stepUp > 0) camPos.y += result.stepUp;
+          controls.moveForward(-velocity.z * delta * (result.dist / moveDist));
         } else {
           velocity.z = 0;
         }
@@ -689,9 +720,10 @@ function animate() {
       const moveDist = moveVec.length();
       if (moveDist > 0) {
         camPos.copy(beforeMove);
-        const safeDist = checkMoveDirection(beforeMove, moveVec, moveDist);
-        if (safeDist > 0.01) {
-          controls.moveRight(-velocity.x * delta * (safeDist / moveDist));
+        const result = tryMoveWithStepUp(beforeMove, moveVec, moveDist);
+        if (result.dist > 0.01) {
+          if (result.stepUp > 0) camPos.y += result.stepUp;
+          controls.moveRight(-velocity.x * delta * (result.dist / moveDist));
         } else {
           velocity.x = 0;
         }
