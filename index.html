@@ -306,30 +306,49 @@ document.addEventListener('keyup', (e) => {
 // ── Collision Detection ──────────────────────────────────────
 const collisionObjects = [];
 const raycaster = new THREE.Raycaster();
-const collisionDirections = [
-  new THREE.Vector3(1, 0, 0),
-  new THREE.Vector3(-1, 0, 0),
-  new THREE.Vector3(0, 0, 1),
-  new THREE.Vector3(0, 0, -1),
-  new THREE.Vector3(1, 0, 1).normalize(),
-  new THREE.Vector3(-1, 0, 1).normalize(),
-  new THREE.Vector3(1, 0, -1).normalize(),
-  new THREE.Vector3(-1, 0, -1).normalize(),
-];
+const COLLISION_MARGIN = 0.5; // Buffer distance from walls
 
-function checkCollision(position) {
-  const origin = position.clone();
-  origin.y = position.y - PLAYER_HEIGHT * 0.3; // Check from mid-body
+// Cast a ray from origin in moveDir; returns distance to wall or Infinity
+function raycastWall(origin, moveDir, maxDist) {
+  raycaster.set(origin, moveDir);
+  raycaster.far = maxDist;
+  const hits = raycaster.intersectObjects(collisionObjects, true);
+  return hits.length > 0 ? hits[0].distance : Infinity;
+}
 
-  for (const dir of collisionDirections) {
-    raycaster.set(origin, dir);
-    raycaster.far = PLAYER_RADIUS;
-    const hits = raycaster.intersectObjects(collisionObjects, true);
-    if (hits.length > 0) {
-      return { collided: true, direction: dir, distance: hits[0].distance };
+// Check if a position is clear (no wall within COLLISION_MARGIN in any direction)
+function isPositionBlocked(pos) {
+  const dirs = [
+    new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0),
+    new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1),
+    new THREE.Vector3(1, 0, 1).normalize(), new THREE.Vector3(-1, 0, 1).normalize(),
+    new THREE.Vector3(1, 0, -1).normalize(), new THREE.Vector3(-1, 0, -1).normalize(),
+  ];
+  // Check at multiple heights (feet, waist, head)
+  const heights = [0.3, 0.5, 0.8];
+  for (const h of heights) {
+    const origin = new THREE.Vector3(pos.x, pos.y - PLAYER_HEIGHT * h, pos.z);
+    for (const dir of dirs) {
+      const dist = raycastWall(origin, dir, COLLISION_MARGIN);
+      if (dist < COLLISION_MARGIN) return true;
     }
   }
-  return { collided: false };
+  return false;
+}
+
+// Check movement along a direction; returns max safe distance
+function checkMoveDirection(pos, moveDir, moveDist) {
+  const dir = moveDir.clone().normalize();
+  // Ray from multiple heights
+  let minDist = moveDist;
+  const heights = [0.3, 0.5, 0.8];
+  for (const h of heights) {
+    const origin = new THREE.Vector3(pos.x, pos.y - PLAYER_HEIGHT * h, pos.z);
+    const wallDist = raycastWall(origin, dir, moveDist + COLLISION_MARGIN);
+    const safeDist = wallDist - COLLISION_MARGIN;
+    if (safeDist < minDist) minDist = safeDist;
+  }
+  return Math.max(0, minDist);
 }
 
 function checkGround(position) {
@@ -622,18 +641,49 @@ function animate() {
 
     // Apply movement with collision
     const camPos = controls.getObject().position;
+    const savedPos = camPos.clone();
 
-    // Try moving
-    const newPos = camPos.clone();
-    controls.moveRight(-velocity.x * delta);
-    controls.moveForward(-velocity.z * delta);
+    // Try forward/backward movement
+    if (Math.abs(velocity.z) > 0.01) {
+      const beforeMove = camPos.clone();
+      controls.moveForward(-velocity.z * delta);
+      const afterMove = camPos.clone();
+      const moveVec = afterMove.clone().sub(beforeMove);
+      const moveDist = moveVec.length();
+      if (moveDist > 0) {
+        camPos.copy(beforeMove);
+        const safeDist = checkMoveDirection(beforeMove, moveVec, moveDist);
+        if (safeDist > 0.01) {
+          controls.moveForward(-velocity.z * delta * (safeDist / moveDist));
+        } else {
+          velocity.z = 0;
+        }
+      }
+    }
 
-    // Horizontal collision check
-    const collision = checkCollision(controls.getObject().position);
-    if (collision.collided) {
-      // Push back
-      const pushBack = collision.direction.clone().multiplyScalar(PLAYER_RADIUS - collision.distance);
-      controls.getObject().position.sub(pushBack);
+    // Try left/right movement
+    if (Math.abs(velocity.x) > 0.01) {
+      const beforeMove = camPos.clone();
+      controls.moveRight(-velocity.x * delta);
+      const afterMove = camPos.clone();
+      const moveVec = afterMove.clone().sub(beforeMove);
+      const moveDist = moveVec.length();
+      if (moveDist > 0) {
+        camPos.copy(beforeMove);
+        const safeDist = checkMoveDirection(beforeMove, moveVec, moveDist);
+        if (safeDist > 0.01) {
+          controls.moveRight(-velocity.x * delta * (safeDist / moveDist));
+        } else {
+          velocity.x = 0;
+        }
+      }
+    }
+
+    // Final safety check — if still inside a wall, revert
+    if (isPositionBlocked(camPos)) {
+      camPos.copy(savedPos);
+      velocity.x = 0;
+      velocity.z = 0;
     }
 
     // Vertical movement
